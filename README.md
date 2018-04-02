@@ -85,7 +85,6 @@ v = v + a * dt
 where Lf is the length of vehicle from front to CoG that has a similar radius.
 ```
 
-
 This model is called Global Kinematic Model.
 
 #### Timestep Length and Elapsed Duration (N & dt)
@@ -94,9 +93,9 @@ Here we define two control variables for the predictive control using model abov
 * Number of future states - `N`
 * Elapsed duration between two states - `dt`
 
-The larger of `N`, the more future states to predict, controller will able to model more complex future trajectory and act accordingly. However, more future states also comes with much higher computation cost. The smaller of `dt`, the higher density of future states. However, it will shorten the total length of future prediction, so controller may not have enough information to act proactively, such as braking before sharp turn.
+The larger of `N`, the more future states to predict, controller will able to model more complex future trajectory and act accordingly. However, more future states will result in longer computational time which effectively increase the latency. The smaller of `dt`, the higher density of future states which gives better accuracy. However, it will shorten the total length of future prediction, so controller may not have enough information to act proactively, such as braking before sharp turn.
 
-I found that `N=10` and `dt=0.1` with 1s of future is good enough for the controller to capture turns ahead while having a relatively low runtime for each prediction.
+I found that `N=10` and `dt=0.1` with 1s of future prediction is good enough for the controller to capture turns ahead while having a relatively low computational time for each prediction.
 
 #### Polynomial Fitting and MPC Preprocessing
 
@@ -119,26 +118,22 @@ Notice that, the first reference state represents current state. Therefore, unde
 
 To mimic real driving conditions, we add a 100 millisecond latency between actuations commands on top of the connection latency.
 
-To deal with the latency, after transforming waypoints, we calculate future state following Global Kinematic Model. Then we use it as the first reference state for MPC.
+Two common approaches to take latency into account:
+1. Following Global Kinematic Model, we propagate the position of the vehicle forward until the expected time when actuations are expected to have an effect. Then we use this position as the first reference state for the MPC.
+2. We directly take latency into account in the MPC optimization problem by constraining the actuators to the values of the previous iteration for the duration of the latency. In other words, current state `t ` depends on the acutators of state `t - 1 - l_ind`, where l_ind is the number of states within the duration of the latency.
 
 ```
-current state: [0, 0, 0, v, cte, epsi]
+l_ind = floor(latency / dt)
 
-               |
-               v
-
-x = 0 + v * cos(0) * latency
-y = 0 + v * sin(0) * latency
-psi = 0 - v * delta / Lf * latency
-v = v + a * latency
-cte = (c0 + c1*x + c2*x^2 + c3*x^3) - y
-epsi = 0 - atan(c1 + 2*c2*x + 3*c3*x^2)
-
-              |
-              v
-
-future state: [x, y, psi, v, cte, epsi]
+if (t > l_ind) {
+  // previous delta
+  delta0 = vars[delta_start + t - 1- l_ind]
+  // previous a
+  a0 = vars[a_start + t - 1 - l_ind]
+}
 ```
+
+In my implementation, I choose the 2nd apporach because it keeps our nonliner model the same while in the 1st approach, it introduct additional estimation error when we propagate the position.
 
 ### Simulation
 #### The vehicle must successfully drive a lap around the track.

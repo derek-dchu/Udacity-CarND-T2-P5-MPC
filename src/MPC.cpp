@@ -19,9 +19,7 @@ double dt = DT;
 //
 // This is the length from front to CoG that has a similar radius.
 const double Lf = 2.67;
-
-const double ref_v = 45;
-const double delta_bound = deg2rad(25)*Lf;
+const double ref_v = 70;
 
 // The solver takes all the state variables and actuator
 // variables in a singular vector. Thus, we should to establish
@@ -39,7 +37,11 @@ class FG_eval {
  public:
   // Fitted polynomial coefficients
   Eigen::VectorXd coeffs;
-  FG_eval(Eigen::VectorXd coeffs) { this->coeffs = coeffs; }
+  int l_ind;
+  FG_eval(Eigen::VectorXd coeffs, int l_ind) { 
+    this->coeffs = coeffs;
+    this->l_ind = l_ind;
+  }
 
   typedef CPPAD_TESTVECTOR(AD<double>) ADvector;
   void operator()(ADvector& fg, const ADvector& vars) {
@@ -57,20 +59,21 @@ class FG_eval {
     // Reference State Cost
     for (t = 0; t < N; ++t) {
       fg[0] += 2000 * CppAD::pow(vars[cte_start + t], 2);
-      fg[0] += 2000 * CppAD::pow(vars[epsi_start + t], 2);
+      fg[0] += 1600 * CppAD::pow(vars[epsi_start + t], 2);
       fg[0] += CppAD::pow(vars[v_start + t] - ref_v, 2);
     }
 
     // Minimize the use of actuators.
     for (t = 0; t < N - 1; ++t) {
-      fg[0] += 7500 * CppAD::pow(vars[delta_start + t], 2);
-      fg[0] += 5 * CppAD::pow(vars[a_start + t], 2) * CppAD::pow(vars[delta_start + t], 2);
+      fg[0] += 300 * CppAD::pow(vars[delta_start + t], 2);
+      fg[0] += 5 * CppAD::pow(vars[a_start + t], 2);
+      fg[0] += 500 * CppAD::pow(vars[delta_start + t] * vars[v_start + t], 2);
     }
 
     // Minimize the value gap between sequential actuations.
     for (t = 0; t < N - 2; ++t) {
-      fg[0] += 1500 * CppAD::pow(vars[delta_start + t + 1] - vars[delta_start + t], 2);
-      fg[0] += 50 * CppAD::pow(vars[a_start + t + 1] - vars[a_start + t], 2);
+      fg[0] += 300 * CppAD::pow(vars[delta_start + t + 1] - vars[delta_start + t], 2);
+      fg[0] += 15 * CppAD::pow(vars[a_start + t + 1] - vars[a_start + t], 2);
     }
 
     //
@@ -107,6 +110,12 @@ class FG_eval {
       AD<double> epsi0 = vars[epsi_start + t - 1];
       AD<double> delta0 = vars[delta_start + t - 1];
       AD<double> a0 = vars[a_start + t - 1];
+
+      // Account for latency, use previous actuations
+      if (t > l_ind) {
+        delta0 = vars[delta_start + t - 1 - l_ind];
+        a0 = vars[a_start + t - 1 - l_ind];
+      }
       
       AD<double> x0_2 = x0*x0;
       AD<double> f0 = coeffs[0] + coeffs[1] * x0 + coeffs[2] * x0_2 + coeffs[3] * x0_2 * x0;
@@ -136,7 +145,7 @@ MPC::MPC() {}
 MPC::~MPC() {}
 
 std::tuple<std::vector<double>, std::vector<double>, std::vector<double>, std::vector<double>>
-MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
+MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs, int latency) {
   bool ok = true;
   size_t i;
   typedef CPPAD_TESTVECTOR(double) Dvector;
@@ -185,8 +194,8 @@ MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   // degrees (values in radians).
   // NOTE: Feel free to change this to something else.
   for (i = delta_start; i < a_start; ++i) {
-    vars_lowerbound[i] = -delta_bound;
-    vars_upperbound[i] = delta_bound;
+    vars_lowerbound[i] = -deg2rad(25);
+    vars_upperbound[i] = deg2rad(25);
   }
 
   // Acceleration/decceleration upper and lower limits.
@@ -219,8 +228,11 @@ MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   constraints_upperbound[cte_start] = cte;
   constraints_upperbound[epsi_start] = epsi;
 
+  // Account for latency, actuator of first l_ind steps are limited to previous state
+  int l_ind = floor(latency / (dt * 1000));
+  if (l_ind > N-1) l_ind = N-1;
   // object that computes objective and constraints
-  FG_eval fg_eval(coeffs);
+  FG_eval fg_eval(coeffs, l_ind);
 
   //
   // NOTE: You don't have to worry about these options
@@ -267,8 +279,11 @@ MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   for (i = 0; i < N-1; ++i) {
     mpc_x_vals.push_back(solution.x[x_start+1+i]);
     mpc_y_vals.push_back(solution.x[y_start+1+i]);
-    mpc_delta_vals.push_back(solution.x[delta_start+i]/Lf);
+    mpc_delta_vals.push_back(solution.x[delta_start+i]);
     mpc_a_vals.push_back(solution.x[a_start+i]);
   }
-  return {mpc_x_vals, mpc_y_vals, mpc_delta_vals, mpc_a_vals};
+
+  return 
+    std::tuple<std::vector<double>, std::vector<double>, std::vector<double>, std::vector<double>>
+    {mpc_x_vals, mpc_y_vals, mpc_delta_vals, mpc_a_vals};
 }

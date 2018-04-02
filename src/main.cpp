@@ -88,7 +88,7 @@ int main() {
           double py = j[1]["y"];
           double psi = j[1]["psi"];
           double v = j[1]["speed"];
-          
+
           // transform waypoints to vehicle's coordinate system
           // and put them in VectorXd
           std::vector<double> vehicle_ptsx, vehicle_ptsy;
@@ -104,17 +104,8 @@ int main() {
           Eigen::VectorXd eigen_ptsx = Eigen::Map<Eigen::VectorXd> (&vehicle_ptsx[0], vehicle_ptsx.size());
           Eigen::VectorXd eigen_ptsy = Eigen::Map<Eigen::VectorXd> (&vehicle_ptsy[0], vehicle_ptsy.size());
           auto coeffs = polyfit(eigen_ptsx, eigen_ptsy, 3);
-		  
-          // predict future position according to the latency
-          double delta = j[1]["steering_angle"];
-          delta *= deg2rad(25);
-          double a = j[1]["throttle"];
-          double Lf = 2.67;
-          double dt = LATENCY / 1000;
-		      px = v * cos(0) * dt;
-          py = v * sin(0) * dt;
-          psi = v * delta / Lf * dt;
-          v += a * dt;
+          double cte = coeffs[0];
+          double epsi = -atan(coeffs[1]);
 
           /*
           * TODO: Calculate steering angle and throttle using MPC.
@@ -122,14 +113,11 @@ int main() {
           * Both are in between [-1, 1].
           *
           */
-          double cte = polyeval(coeffs, px) - py;
-          double epsi = psi - atan(coeffs[1] + 2*coeffs[2]*px + 3*coeffs[3]*px*px);
-
           Eigen::VectorXd state(6);
-          state << px, py, psi, v, cte, epsi;
+          state << 0, 0, 0, v, cte, epsi;
 
           std::vector<double> mpc_x_vals, mpc_y_vals, mpc_delta_vals, mpc_a_vals;
-          std::tie(mpc_x_vals, mpc_y_vals, mpc_delta_vals, mpc_a_vals) = mpc.Solve(state, coeffs);
+          std::tie(mpc_x_vals, mpc_y_vals, mpc_delta_vals, mpc_a_vals) = mpc.Solve(state, coeffs, LATENCY);
 
           double steer_value = mpc_delta_vals[0];
           double throttle_value = mpc_a_vals[0];
